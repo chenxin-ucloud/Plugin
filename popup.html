@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <button id="startBtn">开始抓取</button>
+    <div id="status"></div>
+
+    <div id="requestList" class="request-list"></div>
+
+    <div id="headerInfo" class="header-info" style="display:none">
+      <div class="header-row">
+        <label>Cookie</label>
+        <button class="copy-btn" data-target="cookieVal">复制</button>
+      </div>
+      <div id="cookieVal" class="value-box"></div>
+
+      <div class="header-row">
+        <label>u-csrf-token</label>
+        <button class="copy-btn" data-target="csrfVal">复制</button>
+      </div>
+      <div id="csrfVal" class="value-box"></div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

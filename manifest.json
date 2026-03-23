@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "XHR Header Extractor",
+  "version": "1.0",
+  "description": "捕获 XHR 请求，提取 Cookie 和 u-csrf-token",
+  "permissions": [
+    "webRequest",
+    "activeTab",
+    "tabs",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
