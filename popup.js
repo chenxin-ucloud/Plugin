@@ -8,20 +8,46 @@ const csrfVal = document.getElementById("csrfVal");
 let pollTimer = null;
 let requests = [];
 
-startBtn.addEventListener("click", () => {
-  chrome.runtime.sendMessage({ action: "startCapture" }, () => {
-    status.textContent = "正在重新加载页面...";
-    requestListEl.style.display = "none";
-    headerInfo.style.display = "none";
-    requestListEl.innerHTML = "";
+// popup 打开时，检查是否有正在进行或已完成的捕获，自动恢复状态
+chrome.runtime.sendMessage({ action: "getCaptureStatus" }, (res) => {
+  if (!res) return;
+  if (res.capturing) {
+    status.textContent = "正在捕获请求...";
+    startBtn.textContent = "抓取中...";
+    startBtn.disabled = true;
+    startPolling();
+  } else if (res.complete && res.count > 0) {
+    // 上次捕获已完成但 popup 曾关闭，恢复数据
+    chrome.runtime.sendMessage({ action: "getRequests" }, (res2) => {
+      if (!res2) return;
+      requests = res2.requests;
+      status.textContent = `完成，共 ${requests.length} 个 XHR 请求`;
+      renderList();
+    });
+  }
+});
 
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        chrome.tabs.reload(tabs[0].id, () => {
-          status.textContent = "正在捕获请求...";
-          startPolling();
+startBtn.addEventListener("click", () => {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tabId = tabs[0] ? tabs[0].id : null;
+    chrome.runtime.sendMessage({ action: "startCapture" }, () => {
+      status.textContent = "正在重新加载页面并捕获请求...";
+      startBtn.textContent = "抓取中...";
+      startBtn.disabled = true;
+      requestListEl.style.display = "none";
+      headerInfo.style.display = "none";
+      requestListEl.innerHTML = "";
+
+      // 使用 scripting.executeScript 在页面内执行 reload
+      // 这样 reload 由页面自身发起，popup 不会被关闭
+      if (tabId) {
+        chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          func: () => location.reload()
         });
       }
+
+      startPolling();
     });
   });
 });
@@ -37,11 +63,13 @@ function startPolling() {
       status.textContent = `已捕获 ${requests.length} 个 XHR 请求...`;
       renderList();
 
-      // Stop polling after 5 seconds or 30 ticks
-      if (count >= 30) {
+      // 捕获完成或超时
+      if (res.complete || count >= 30) {
         clearInterval(pollTimer);
         pollTimer = null;
         status.textContent = `完成，共 ${requests.length} 个 XHR 请求`;
+        startBtn.textContent = "开始抓取";
+        startBtn.disabled = false;
       }
     });
   }, 500);
