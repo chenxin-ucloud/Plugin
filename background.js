@@ -1,12 +1,14 @@
 // 使用 chrome.storage.session 持久化状态，防止 Service Worker 被终止后状态丢失
-// chrome.storage.session 数据仅在浏览器会话期间保留，不会写入磁盘
 
 let capturedRequests = [];
 let capturing = false;
 let captureComplete = false;
 let captureStartTime = 0;
+let captureGeneration = 0; // 用于区分不同捕获会话，防止旧定时器干扰新会话
+let stateRestored = false;
 
-const CAPTURE_DURATION = 15000; // 15秒捕获时间
+const CAPTURE_DURATION = 15000;
+const MATCH_PATTERN = "Action=GetRegion";
 
 // Service Worker 启动时，从 storage.session 恢复状态
 chrome.storage.session.get(
@@ -21,24 +23,41 @@ chrome.storage.session.get(
     if (data.capturing && data.captureStartTime) {
       const elapsed = Date.now() - data.captureStartTime;
       if (elapsed < CAPTURE_DURATION) {
-        // 捕获仍在时间窗口内，继续捕获
         capturing = true;
         captureStartTime = data.captureStartTime;
-        // 设置剩余时间的定时器
         setTimeout(() => {
           capturing = false;
           captureComplete = true;
           saveState();
         }, CAPTURE_DURATION - elapsed);
       } else {
-        // 已超时，标记为完成
         capturing = false;
         captureComplete = true;
         saveState();
       }
     }
+    stateRestored = true;
+
+    // 状态恢复后，处理缓冲区中在恢复前到达的请求
+    processPendingRequests();
   }
 );
+
+// 缓冲区：存储状态恢复前到达的匹配请求，避免竞态条件丢失
+let pendingRequests = [];
+
+function processPendingRequests() {
+  if (!capturing || capturedRequests.length > 0 || pendingRequests.length === 0) {
+    pendingRequests = [];
+    return;
+  }
+  // 取第一个匹配请求
+  capturedRequests.push(pendingRequests[0]);
+  capturing = false;
+  captureComplete = true;
+  pendingRequests = [];
+  saveState();
+}
 
 function saveState() {
   chrome.storage.session.set({
@@ -51,19 +70,21 @@ function saveState() {
 
 chrome.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
-    if (!capturing) return;
     if (details.type !== "xmlhttprequest") return;
-    // 精准匹配：只捕获包含 ?Action=GetRegion 的请求
-    if (!details.url.includes("?Action=GetRegion")) return;
+    if (!details.url.includes(MATCH_PATTERN)) return;
 
-    // 已捕获到匹配请求，忽略后续重复请求
+    const req = { url: details.url, headers: details.requestHeaders || [] };
+
+    // 状态尚未从 storage 恢复，先缓冲请求
+    if (!stateRestored) {
+      pendingRequests.push(req);
+      return;
+    }
+
+    if (!capturing) return;
     if (capturedRequests.length > 0) return;
 
-    capturedRequests.push({
-      url: details.url,
-      headers: details.requestHeaders || []
-    });
-    // 匹配到第一个即停止捕获
+    capturedRequests.push(req);
     capturing = false;
     captureComplete = true;
     saveState();
@@ -72,16 +93,23 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
   ["requestHeaders", "extraHeaders"]
 );
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+// 保持 Service Worker 活跃：popup 通过 port 连接防止 SW 被终止
+chrome.runtime.onConnect.addListener(() => {});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.action === "startCapture") {
     capturedRequests = [];
+    pendingRequests = [];
     capturing = true;
     captureComplete = false;
     captureStartTime = Date.now();
+    captureGeneration++;
+    const gen = captureGeneration;
     saveState();
 
-    // 15秒后自动停止捕获
+    // 15秒后自动停止，通过 generation 确保只终止当前会话
     setTimeout(() => {
+      if (captureGeneration !== gen) return; // 已被新的捕获取代，忽略
       capturing = false;
       captureComplete = true;
       saveState();
@@ -94,6 +122,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ capturing, complete: captureComplete, count: capturedRequests.length });
   } else if (message.action === "clearRequests") {
     capturedRequests = [];
+    pendingRequests = [];
     capturing = false;
     captureComplete = false;
     captureStartTime = 0;

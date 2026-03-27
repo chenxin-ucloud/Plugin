@@ -6,6 +6,9 @@ const csrfVal = document.getElementById("csrfVal");
 
 let pollTimer = null;
 
+// 建立 port 连接，保持 Service Worker 在捕获期间不被终止
+let keepAlivePort = null;
+
 // popup 打开时，检查是否有正在进行或已完成的捕获，自动恢复状态
 chrome.runtime.sendMessage({ action: "getCaptureStatus" }, (res) => {
   if (!res) return;
@@ -32,17 +35,49 @@ startBtn.addEventListener("click", () => {
       startBtn.disabled = true;
       headerInfo.style.display = "none";
 
+      // 建立 port 连接保持 SW 活跃
+      if (keepAlivePort) { keepAlivePort.disconnect(); }
+      keepAlivePort = chrome.runtime.connect({ name: "keepalive" });
+
+      // 等待页面加载完成后再 reload，避免快速连续操作时注入到正在卸载的旧页面
       if (tabId) {
-        chrome.scripting.executeScript({
-          target: { tabId: tabId },
-          func: () => location.reload()
-        });
+        reloadWhenReady(tabId);
       }
 
       startPolling();
     });
   });
 });
+
+// 确保页面处于 complete 状态再执行 reload
+function reloadWhenReady(tabId) {
+  chrome.tabs.get(tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    if (tab.status === "complete") {
+      doReload(tabId);
+    } else {
+      // 页面仍在加载（上次 reload 还没完成），等它加载完再 reload
+      const listener = (id, info) => {
+        if (id === tabId && info.status === "complete") {
+          chrome.tabs.onUpdated.removeListener(listener);
+          doReload(tabId);
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    }
+  });
+}
+
+function doReload(tabId) {
+  chrome.scripting.executeScript(
+    { target: { tabId: tabId }, func: () => location.reload() },
+    () => {
+      if (chrome.runtime.lastError) {
+        chrome.tabs.reload(tabId);
+      }
+    }
+  );
+}
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -55,6 +90,7 @@ function startPolling() {
       if (res.requests.length > 0) {
         clearInterval(pollTimer);
         pollTimer = null;
+        if (keepAlivePort) { keepAlivePort.disconnect(); keepAlivePort = null; }
         showHeaders(res.requests[0]);
         status.textContent = "完成";
         startBtn.textContent = "开始抓取";
@@ -65,6 +101,7 @@ function startPolling() {
       if (res.complete || count >= 30) {
         clearInterval(pollTimer);
         pollTimer = null;
+        if (keepAlivePort) { keepAlivePort.disconnect(); keepAlivePort = null; }
         status.textContent = "未捕获到匹配的请求";
         startBtn.textContent = "开始抓取";
         startBtn.disabled = false;
