@@ -56,11 +56,16 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     // 精准匹配：只捕获包含 ?Action=GetRegion 的请求
     if (!details.url.includes("?Action=GetRegion")) return;
 
+    // 已捕获到匹配请求，忽略后续重复请求
+    if (capturedRequests.length > 0) return;
+
     capturedRequests.push({
       url: details.url,
       headers: details.requestHeaders || []
     });
-    // 每次捕获到请求后持久化
+    // 匹配到第一个即停止捕获
+    capturing = false;
+    captureComplete = true;
     saveState();
   },
   { urls: ["<all_urls>"] },

@@ -1,12 +1,10 @@
 const startBtn = document.getElementById("startBtn");
 const status = document.getElementById("status");
-const requestListEl = document.getElementById("requestList");
 const headerInfo = document.getElementById("headerInfo");
 const cookieVal = document.getElementById("cookieVal");
 const csrfVal = document.getElementById("csrfVal");
 
 let pollTimer = null;
-let requests = [];
 
 // popup 打开时，检查是否有正在进行或已完成的捕获，自动恢复状态
 chrome.runtime.sendMessage({ action: "getCaptureStatus" }, (res) => {
@@ -17,12 +15,10 @@ chrome.runtime.sendMessage({ action: "getCaptureStatus" }, (res) => {
     startBtn.disabled = true;
     startPolling();
   } else if (res.complete && res.count > 0) {
-    // 上次捕获已完成但 popup 曾关闭，恢复数据
     chrome.runtime.sendMessage({ action: "getRequests" }, (res2) => {
-      if (!res2) return;
-      requests = res2.requests;
-      status.textContent = `完成，共 ${requests.length} 个 XHR 请求`;
-      renderList();
+      if (!res2 || res2.requests.length === 0) return;
+      showHeaders(res2.requests[0]);
+      status.textContent = "完成";
     });
   }
 });
@@ -34,12 +30,8 @@ startBtn.addEventListener("click", () => {
       status.textContent = "正在重新加载页面并捕获请求...";
       startBtn.textContent = "抓取中...";
       startBtn.disabled = true;
-      requestListEl.style.display = "none";
       headerInfo.style.display = "none";
-      requestListEl.innerHTML = "";
 
-      // 使用 scripting.executeScript 在页面内执行 reload
-      // 这样 reload 由页面自身发起，popup 不会被关闭
       if (tabId) {
         chrome.scripting.executeScript({
           target: { tabId: tabId },
@@ -59,15 +51,21 @@ function startPolling() {
     count++;
     chrome.runtime.sendMessage({ action: "getRequests" }, (res) => {
       if (!res) return;
-      requests = res.requests;
-      status.textContent = `已捕获 ${requests.length} 个 XHR 请求...`;
-      renderList();
 
-      // 捕获完成或超时
+      if (res.requests.length > 0) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        showHeaders(res.requests[0]);
+        status.textContent = "完成";
+        startBtn.textContent = "开始抓取";
+        startBtn.disabled = false;
+        return;
+      }
+
       if (res.complete || count >= 30) {
         clearInterval(pollTimer);
         pollTimer = null;
-        status.textContent = `完成，共 ${requests.length} 个 XHR 请求`;
+        status.textContent = "未捕获到匹配的请求";
         startBtn.textContent = "开始抓取";
         startBtn.disabled = false;
       }
@@ -75,44 +73,9 @@ function startPolling() {
   }, 500);
 }
 
-function getUrlName(url) {
-  try {
-    const pathname = new URL(url).pathname;
-    const parts = pathname.split("/").filter(Boolean);
-    return parts.length > 0 ? parts[parts.length - 1] : pathname;
-  } catch {
-    return url;
-  }
-}
-
-function renderList() {
-  if (requests.length === 0) return;
-  requestListEl.style.display = "block";
-  requestListEl.innerHTML = "";
-
-  requests.forEach((req, i) => {
-    const div = document.createElement("div");
-    div.className = "request-item" + (i === 0 ? " selected" : "");
-    div.textContent = getUrlName(req.url);
-    div.title = req.url;
-    div.addEventListener("click", () => selectRequest(i));
-    requestListEl.appendChild(div);
-  });
-
-  selectRequest(0);
-}
-
-function selectRequest(index) {
-  document.querySelectorAll(".request-item").forEach((el, i) => {
-    el.classList.toggle("selected", i === index);
-  });
-
-  const req = requests[index];
-  if (!req) return;
-
+function showHeaders(req) {
   const cookie = findHeader(req.headers, "cookie");
   const csrf = findHeader(req.headers, "u-csrf-token");
-
   cookieVal.textContent = cookie || "(未找到)";
   csrfVal.textContent = csrf || "(未找到)";
   headerInfo.style.display = "block";
